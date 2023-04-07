@@ -18,6 +18,13 @@ import safetensors.torch
 presetWeights = PresetWeights()
 
 shared.UNetBManager = None
+shared.UNBMSettingsInjector = None
+
+class SettingsInjector():
+    def __init__(self):
+        self.enabled = False
+        self.gui_weights = [0] * 27
+        self.modelB = None
 
 known_block_prefixes = [
     'input_blocks.0.',
@@ -362,6 +369,9 @@ class Script(scripts.Script):
 
             shared.opts.onchange("sd_model_checkpoint",
                                  wrap_queued_call(reload_modelA_checkpoint), call=False)
+
+        if shared.UNBMSettingsInjector is None:
+            shared.UNBMSettingsInjector = SettingsInjector()
 
     def title(self):
         return "Runtime block merging for UNet"
@@ -724,9 +734,10 @@ class Script(scripts.Script):
         return process_script_params
 
     def process(self, p, *args):
-        gui_weights = args[:27]
-        modelB = args[27]
-        enabled = args[28]
+        injector_enabled = shared.UNBMSettingsInjector.enabled
+        gui_weights = shared.UNBMSettingsInjector.weights if injector_enabled else args[:27]
+        modelB = shared.UNBMSettingsInjector.modelB if injector_enabled else args[27]
+        enabled = injector_enabled if injector_enabled else args[28]
         if not enabled:
             return
         if not shared.UNetBManager:
