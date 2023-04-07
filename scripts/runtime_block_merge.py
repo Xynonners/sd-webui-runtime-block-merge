@@ -350,6 +350,59 @@ class UNetStateManager(object):
         # self.unet_block_module_list = []
         self.enabled = False
 
+def on_save_checkpoint(output_mode_radio, position_id_fix_radio, output_format_radio, save_checkpoint_name, output_recipe_checkbox, *weights,
+                        ):
+    current_weights_nat = weights[:27]
+
+    weights_output_recipe = weights[27:]
+    if not save_checkpoint_name:
+        # current timestamp
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_checkpoint_name = f"mbw_{timestamp_str}"
+    save_checkpoint_namewext = save_checkpoint_name + output_format_radio
+    loaded_sd_model_path = Path(shared.sd_model.sd_model_checkpoint)
+    model_ext = loaded_sd_model_path.suffix
+    if model_ext == '.ckpt':
+
+        model_A_raw_state_dict = torch.load(shared.sd_model.sd_model_checkpoint, map_location='cpu')
+        if 'state_dict' in model_A_raw_state_dict:
+            model_A_raw_state_dict = model_A_raw_state_dict['state_dict']
+    elif model_ext == '.safetensors':
+        model_A_raw_state_dict = safetensors.torch.load_file(shared.sd_model.sd_model_checkpoint, device="cpu")
+    save_checkpoint_path = Path(shared.sd_model.sd_model_checkpoint).parent / save_checkpoint_namewext
+
+    if output_mode_radio == 'Runtime Snapshot':
+        snapshot_state_dict = shared.sd_model.model.diffusion_model.state_dict()
+
+    elif output_mode_radio == 'Max Precision':
+        snapshot_state_dict = shared.UNetBManager.model_state_construct(current_weights_nat)
+
+    snapshot_state_dict_prefixed = {'model.diffusion_model.' + key: value for key, value in
+                                    snapshot_state_dict.items()}
+    if not set(snapshot_state_dict_prefixed.keys()).issubset(set(model_A_raw_state_dict.keys())):
+        print(
+            'warning: snapshot state_dict keys are not subset of model A state_dict keys, possible structural deviation')
+
+    combined_state_dict = {**model_A_raw_state_dict, **snapshot_state_dict_prefixed}
+    if position_id_fix_radio == 'Fix':
+        combined_state_dict['cond_stage_model.transformer.text_model.embeddings.position_ids'] = torch.tensor([list(range(77))], dtype=torch.int64)
+
+    if output_format_radio == '.ckpt':
+        state_dict_save = {'state_dict': combined_state_dict}
+        torch.save(state_dict_save, save_checkpoint_path)
+    elif output_format_radio == '.safetensors':
+        safetensors.torch.save_file(combined_state_dict, save_checkpoint_path)
+
+    if output_recipe_checkbox:
+        recipe_path = Path(shared.sd_model.sd_model_checkpoint).parent / f"{save_checkpoint_name}.recipe.txt"
+        with open(recipe_path, 'w') as f:
+            f.write(f"modelA={shared.sd_model.sd_model_checkpoint}\n")
+            f.write(f"modelB={shared.UNetBManager.modelB_path}\n")
+            f.write(f"position_id_fix={position_id_fix_radio}\n")
+            f.write(f"output_mode={output_mode_radio}\n")
+            f.write(f"{','.join([str(w) for w in weights_output_recipe])}\n")
+
+    return gr.update(value=save_checkpoint_name)
 
 class Script(scripts.Script):
     def __init__(self) -> None:
@@ -657,60 +710,6 @@ class Script(scripts.Script):
             with gr.Row():
                 save_checkpoint_name_textbox = gr.Textbox(label="New Checkpoint Name")
                 save_checkpoint_button = gr.Button(value="Save Runtime Checkpoint", elem_id="mbw_save_checkpoint_button", variant='primary', interactive=True, visible=False, )
-
-            def on_save_checkpoint(output_mode_radio, position_id_fix_radio, output_format_radio, save_checkpoint_name, output_recipe_checkbox, *weights,
-                                   ):
-                current_weights_nat = weights[:27]
-
-                weights_output_recipe = weights[27:]
-                if not save_checkpoint_name:
-                    # current timestamp
-                    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    save_checkpoint_name = f"mbw_{timestamp_str}"
-                save_checkpoint_namewext = save_checkpoint_name + output_format_radio
-                loaded_sd_model_path = Path(shared.sd_model.sd_model_checkpoint)
-                model_ext = loaded_sd_model_path.suffix
-                if model_ext == '.ckpt':
-
-                    model_A_raw_state_dict = torch.load(shared.sd_model.sd_model_checkpoint, map_location='cpu')
-                    if 'state_dict' in model_A_raw_state_dict:
-                        model_A_raw_state_dict = model_A_raw_state_dict['state_dict']
-                elif model_ext == '.safetensors':
-                    model_A_raw_state_dict = safetensors.torch.load_file(shared.sd_model.sd_model_checkpoint, device="cpu")
-                save_checkpoint_path = Path(shared.sd_model.sd_model_checkpoint).parent / save_checkpoint_namewext
-
-                if output_mode_radio == 'Runtime Snapshot':
-                    snapshot_state_dict = shared.sd_model.model.diffusion_model.state_dict()
-
-                elif output_mode_radio == 'Max Precision':
-                    snapshot_state_dict = shared.UNetBManager.model_state_construct(current_weights_nat)
-
-                snapshot_state_dict_prefixed = {'model.diffusion_model.' + key: value for key, value in
-                                                snapshot_state_dict.items()}
-                if not set(snapshot_state_dict_prefixed.keys()).issubset(set(model_A_raw_state_dict.keys())):
-                    print(
-                        'warning: snapshot state_dict keys are not subset of model A state_dict keys, possible structural deviation')
-
-                combined_state_dict = {**model_A_raw_state_dict, **snapshot_state_dict_prefixed}
-                if position_id_fix_radio == 'Fix':
-                    combined_state_dict['cond_stage_model.transformer.text_model.embeddings.position_ids'] = torch.tensor([list(range(77))], dtype=torch.int64)
-
-                if output_format_radio == '.ckpt':
-                    state_dict_save = {'state_dict': combined_state_dict}
-                    torch.save(state_dict_save, save_checkpoint_path)
-                elif output_format_radio == '.safetensors':
-                    safetensors.torch.save_file(combined_state_dict, save_checkpoint_path)
-
-                if output_recipe_checkbox:
-                    recipe_path = Path(shared.sd_model.sd_model_checkpoint).parent / f"{save_checkpoint_name}.recipe.txt"
-                    with open(recipe_path, 'w') as f:
-                        f.write(f"modelA={shared.sd_model.sd_model_checkpoint}\n")
-                        f.write(f"modelB={shared.UNetBManager.modelB_path}\n")
-                        f.write(f"position_id_fix={position_id_fix_radio}\n")
-                        f.write(f"output_mode={output_mode_radio}\n")
-                        f.write(f"{','.join([str(w) for w in weights_output_recipe])}\n")
-
-                return gr.update(value=save_checkpoint_name)
 
 
             def on_change_force_cpu(force_cpu_flag):
