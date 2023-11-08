@@ -9,6 +9,7 @@ import gradio as gr
 from ldm.modules.diffusionmodules.openaimodel import UNetModel
 from modules import sd_models, shared, devices
 from scripts.mbw_util.preset_weights import PresetWeights
+from scripts.mbw_util.mbwrt_logger import logger_mbwrt as logger
 import torch
 from natsort import natsorted
 
@@ -109,7 +110,7 @@ class UNetStateManager(object):
         # if self.enabled:
         # self.model_state_apply(self.gui_weights)
         self.model_state_apply(self.applied_weights)
-        print('model A reloaded')
+        logger.info('model A reloaded')
 
     def load_modelB(self, modelB_path, force_cpu_checkbox, current_weights):
         self.force_cpu = force_cpu_checkbox
@@ -145,7 +146,7 @@ class UNetStateManager(object):
 
         # if cache_enabled and model_info in sd_models.checkpoints_loaded:
         #     # use checkpoint cache
-        #     print(f"Loading weights [{sd_model_hash}] from cache")
+        #     logger.info(f"Loading weights [{sd_model_hash}] from cache")
         #     self.modelB_state_dict = sd_models.checkpoints_loaded[model_info]
 
         if self.modelB_state_dict:
@@ -160,13 +161,13 @@ class UNetStateManager(object):
             sd_models.read_state_dict(checkpoint_file, map_location=self.device))
         self.modelB_dtype = itertools.islice(self.modelB_state_dict.items(), 1).__next__()[1].dtype
         if len(self.modelA_state_dict) != len(self.modelB_state_dict):
-            print('modelA and modelB state dict have different length, aborting')
+            logger.error('modelA and modelB state dict have different length, aborting')
             return False
         self.map_blocks(self.modelB_state_dict, self.modelB_state_dict_by_blocks)
         # verify self.modelA_state_dict and self.modelB_state_dict have same structure
         self.model_state_apply(current_weights)
 
-        print('model B loaded')
+        logger.info('model B loaded')
         self.enabled = True
         return True
 
@@ -236,14 +237,16 @@ class UNetStateManager(object):
 
     def model_state_apply_modified_blocks(self, current_weights, current_model_B):
         if not self.enabled:
+            logger.debug('model B is not enabled')
             return
         modelB_info = sd_models.get_closet_checkpoint_match(current_model_B)
         checkpoint_file_B = modelB_info.filename
         if checkpoint_file_B != self.modelB_path:
-            print('model B changed, shouldn\'t happen')
+            logger.warn('model B changed, shouldn\'t happen')
             self.load_modelB(current_model_B, current_weights)
             return
         if self.applied_weights == current_weights:
+            logger.debug('Nothing to change on model B')
             return
         operation_dtype = torch.float32 if self.modelA_dtype == torch.float32 or self.modelB_dtype == torch.float32 else torch.float16
         for i in range(27):
@@ -303,7 +306,7 @@ class UNetStateManager(object):
 
     def map_blocks(self, model_state_dict_input, model_state_dict_by_blocks):
         if model_state_dict_by_blocks:
-            print('mapping to non empty list')
+            logger.error('mapping to non empty list')
             return
         model_state_dict_sorted_keys = natsorted(model_state_dict_input.keys())
         # sort model_state_dict by model_state_dict_sorted_keys
@@ -313,10 +316,10 @@ class UNetStateManager(object):
         current_block_index = 0
         processing_block_dict = {}
         for key in model_state_dict:
-            # print(key)
+            # logger.debug(key)
             if not key.startswith(known_block_prefixes[current_block_index]):
                 if not key.startswith(known_block_prefixes[current_block_index + 1]):
-                    print(
+                    logger.warn(
                         f"unknown key {key} in statedict after block {known_block_prefixes[current_block_index]}, possible UNet structure deviation"
                     )
                     continue
@@ -328,7 +331,7 @@ class UNetStateManager(object):
             processing_block_dict[block_local_key] = model_state_dict[key]
 
         model_state_dict_by_blocks.append(processing_block_dict)
-        print('mapping complete')
+        logger.info('mapping complete')
         return
 
     def restore_original_unet(self):
@@ -380,7 +383,7 @@ def on_save_checkpoint(output_mode_radio, position_id_fix_radio, output_format_r
     snapshot_state_dict_prefixed = {'model.diffusion_model.' + key: value for key, value in
                                     snapshot_state_dict.items()}
     if not set(snapshot_state_dict_prefixed.keys()).issubset(set(model_A_raw_state_dict.keys())):
-        print(
+        logger.warn(
             'warning: snapshot state_dict keys are not subset of model A state_dict keys, possible structural deviation')
 
     combined_state_dict = {**model_A_raw_state_dict, **snapshot_state_dict_prefixed}
@@ -526,11 +529,9 @@ class Script(scripts.Script):
                 sl_OUT_00, sl_OUT_01, sl_OUT_02, sl_OUT_03, sl_OUT_04, sl_OUT_05,
                 sl_OUT_06, sl_OUT_07, sl_OUT_08, sl_OUT_09, sl_OUT_10, sl_OUT_11]
             sl_ALL_nat = [*sl_INPUT, *sl_MID, sl_OUT, *sl_OUTPUT, sl_TIME_EMBED]
-            sl_ALL = [*sl_INPUT, *sl_MID, *sl_OUTPUT, sl_TIME_EMBED, sl_OUT]
 
-
-
-
+            # Fixed yay
+            sl_ALL = [*sl_INPUT, *sl_MID, *sl_OUTPUT, sl_OUT, sl_TIME_EMBED]
 
             def handle_modelB_load(modelB, force_cpu_checkbox, *slALL):
                 if modelB is None:
@@ -585,7 +586,7 @@ class Script(scripts.Script):
                         parsed_json = json.loads(constructed_json)
 
                     except Exception as e:
-                        print(e)
+                        logger.error(e)
                         return None
                     weight_name_map = {
                         'IN00': 0,
@@ -620,10 +621,10 @@ class Script(scripts.Script):
                     # type check
                     for key, value in parsed_json.items():
                         if key not in weight_name_map and key not in extra_commands:
-                            print(f'invalid key: {key}')
+                            logger.error(f'invalid key: {key}')
                             return None
                         if not (isinstance(value, (float, int))) or value < -1 or value > 2:
-                            print(f'{key} value {value} out of range')
+                            logger.error(f'{key} value {value} out of range')
                             return None
 
                     weight_list = current_weights
@@ -699,7 +700,7 @@ class Script(scripts.Script):
                                                  choices=["Keep Original", "Fix"], value="Keep Original", type="value", interactive=True)
 
                 output_format_radio = gr.Radio(label="Output Format",
-                                               choices=[".ckpt", ".safetensors"], value=".ckpt", type="value",
+                                               choices=[".ckpt", ".safetensors"], value=".safetensors", type="value",
                                                interactive=True)
             with gr.Row():
                 output_recipe_checkbox = gr.Checkbox(label="Output Recipe", value=True, interactive=True)
