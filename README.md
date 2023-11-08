@@ -27,6 +27,30 @@ sl_ALL = [*sl_INPUT, *sl_MID, *sl_OUTPUT, sl_TIME_EMBED, sl_OUT]
 safetensors.torch.save_file(combined_state_dict, save_checkpoint_path, metadata=metadata if len(metadata)>0 else None)
 ```
 
+## Read metadata inside the model
+
+- Read by [safetensors_util](https://github.com/by321/safetensors_util), or read the `extras.py`.
+
+- If success, you will see a JSON string:
+
+```json
+{
+    "__metadata__": {
+        "sd_mbwrt_receipe": {
+            "type": "auto-mbw-rt",
+            "modelA": "_03a-mzpikas_tmnd_enhanced-sd-v1-4.safetensors",
+            "modelB": "_04a-dreamshaper_8-sd-v1-4.safetensors",
+            "modelO": "03b-verify",
+            "position_id_fix": "Keep Original",
+            "output_mode": "Max Precision",
+            "mbwrt_weights": "0.3,0.8,1,0.5,1,0,0.7,0.9,0.5,0.9,0.2,0.2,0.6,0,0.3,0.3,1,1,0.8,0.2,0.7,0,1,0.3,0.2,0.9,0.2",
+            "mbwrt_weights_seq": "[*sl_INPUT, *sl_MID, *sl_OUTPUT, sl_OUT, sl_TIME_EMBED]"
+        },
+        "format": "pt"
+    }
+}
+```
+
 ## This is part of my research.
 
 - Just a hobby. [If you are feared by tuning for numbers, try "averaging" by simply 0.5, 0.33, 0.25... for 20 models. It works.](https://github.com/6DammK9/nai-anime-pure-negative-prompt/tree/main/ch05).
