@@ -355,6 +355,7 @@ class UNetStateManager(object):
 
 def on_save_checkpoint(output_mode_radio, position_id_fix_radio, output_format_radio, save_checkpoint_name, output_recipe_checkbox, *weights,
                         ):
+    logger.debug("Gathering MBW info")
     current_weights_nat = weights[:27]
 
     weights_output_recipe = weights[27:]
@@ -362,11 +363,12 @@ def on_save_checkpoint(output_mode_radio, position_id_fix_radio, output_format_r
         # current timestamp
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         save_checkpoint_name = f"mbw_{timestamp_str}"
+        logger.info(f"Default checkpoint name generated: {save_checkpoint_name}")
     save_checkpoint_namewext = save_checkpoint_name + output_format_radio
     loaded_sd_model_path = Path(shared.sd_model.sd_model_checkpoint)
     model_ext = loaded_sd_model_path.suffix
+    logger.debug("Reading model A")
     if model_ext == '.ckpt':
-
         model_A_raw_state_dict = torch.load(shared.sd_model.sd_model_checkpoint, map_location='cpu')
         if 'state_dict' in model_A_raw_state_dict:
             model_A_raw_state_dict = model_A_raw_state_dict['state_dict']
@@ -390,20 +392,46 @@ def on_save_checkpoint(output_mode_radio, position_id_fix_radio, output_format_r
     if position_id_fix_radio == 'Fix':
         combined_state_dict['cond_stage_model.transformer.text_model.embeddings.position_ids'] = torch.tensor([list(range(77))], dtype=torch.int64)
 
-    if output_format_radio == '.ckpt':
-        state_dict_save = {'state_dict': combined_state_dict}
-        torch.save(state_dict_save, save_checkpoint_path)
-    elif output_format_radio == '.safetensors':
-        safetensors.torch.save_file(combined_state_dict, save_checkpoint_path)
+    # https://github.com/AUTOMATIC1111/stable-diffusion-webui/blob/master/modules/extras.py#L257
+    # No there is no UI for you to drop the receipe haha
+    metadata = {}
+    metadata["format"] = "pt"
 
+    # Output the text file to the model dir is anti-pattern, but no complains received. Meanwhile I manually append console log to there also.
     if output_recipe_checkbox:
+        model_a_name = loaded_sd_model_path.name
+        model_b_name = Path(shared.UNetBManager.modelB_path).name
+        model_o_name = Path(save_checkpoint_name).name
+
+        # Sad that model information is lost. Align to the text file instead.
+        merge_recipe = {
+            "type": "auto-mbw-rt", # Actually not auto here, but time to advertise?
+            "modelA": model_a_name,
+            "modelB": model_b_name,
+            "modelO": model_o_name,
+            "position_id_fix": position_id_fix_radio,
+            "output_mode": output_mode_radio,
+            "mbwrt_weights": ','.join([str(w) for w in weights_output_recipe]),
+            "mbwrt_weights_seq": "[*sl_INPUT, *sl_MID, *sl_OUTPUT, sl_OUT, sl_TIME_EMBED]"
+        }
+        metadata["sd_mbwrt_receipe"] = json.dumps(merge_recipe)
         recipe_path = Path(shared.sd_model.sd_model_checkpoint).parent / f"{save_checkpoint_name}.recipe.txt"
+        logger.debug(f"Saving receipe file as {recipe_path}")
         with open(recipe_path, 'w') as f:
-            f.write(f"modelA={shared.sd_model.sd_model_checkpoint}\n")
-            f.write(f"modelB={shared.UNetBManager.modelB_path}\n")
+            f.write(f"modelA={model_a_name}\n")
+            f.write(f"modelB={model_b_name}\n")
+            f.write(f"modelO={model_o_name}\n")
             f.write(f"position_id_fix={position_id_fix_radio}\n")
             f.write(f"output_mode={output_mode_radio}\n")
             f.write(f"{','.join([str(w) for w in weights_output_recipe])}\n")
+
+    if output_format_radio == '.ckpt':
+        state_dict_save = {'state_dict': combined_state_dict}
+        torch.save(state_dict_save, save_checkpoint_path)
+    elif output_format_radio == '.safetensors':       
+        safetensors.torch.save_file(combined_state_dict, save_checkpoint_path, metadata=metadata if len(metadata)>0 else None)
+    
+    logger.info(f"Checkpoint saved to {save_checkpoint_path}.")
 
     return gr.update(value=save_checkpoint_name)
 
@@ -613,9 +641,9 @@ class Script(scripts.Script):
                         'OUT08': 21,
                         'OUT09': 22,
                         'OUT10': 23,
-                        'OUT11': 24,
-                        'TIME_EMBED': 25,
-                        'OUT': 26
+                        'OUT11': 24,                        
+                        'OUT': 25,
+                        'TIME_EMBED': 26
                     }
                     extra_commands = ['BASE']
                     # type check
