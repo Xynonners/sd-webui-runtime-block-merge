@@ -1,4 +1,4 @@
-# auto-MBW-rt "runtime enhancement" by 6DammK9
+# auto-MBW-rt "runtime enhancement" by 6DammK9 (1.7.0 Tested)
 
 Minor fix and enhancements on top of [Xynonners' Fork](https://github.com/Xynonners/sd-webui-runtime-block-merge). Development along with [my fork of auto-MBW-rt](https://github.com/6DammK9/auto-MBW-rt/tree/master).
 
