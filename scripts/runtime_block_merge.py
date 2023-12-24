@@ -21,13 +21,8 @@ presetWeights = PresetWeights()
 shared.UNetBManager = None
 shared.UNBMSettingsInjector = None
 
-class SettingsInjector():
-    def __init__(self):
-        self.enabled = False
-        self.gui_weights = [0] * 27
-        self.modelB = None
-
-known_block_prefixes = [
+# 231223: To support SDXL, we must eliminate all magic numbers and try to detect SDXL models (given such scarce information)
+known_block_prefixes_sd1 = [
     'input_blocks.0.',
     'input_blocks.1.',
     'input_blocks.2.',
@@ -57,6 +52,43 @@ known_block_prefixes = [
     'time_embed.'
 ]
 
+known_block_prefixes_sdxl = [
+    'input_blocks.0.',
+    'input_blocks.1.',
+    'input_blocks.2.',
+    'input_blocks.3.',
+    'input_blocks.4.',
+    'input_blocks.5.',
+    'input_blocks.6.',
+    'input_blocks.7.',
+    'input_blocks.8.',
+    'label_emb.',
+    'middle_block.',
+    'out.',
+    'output_blocks.0.',
+    'output_blocks.1.',
+    'output_blocks.2.',
+    'output_blocks.3.',
+    'output_blocks.4.',
+    'output_blocks.5.',
+    'output_blocks.6.',
+    'output_blocks.7.',
+    'output_blocks.8.',
+    'time_embed.'
+]
+
+known_block_prefixes = known_block_prefixes_sd1
+
+known_block_prefixes_count = len(known_block_prefixes) # 27
+
+reduced_weights_length = known_block_prefixes_count - 2 # 25
+
+class SettingsInjector():
+    def __init__(self):
+        self.enabled = False
+        self.gui_weights = [0] * known_block_prefixes_count
+        self.modelB = None
+
 class UNetStateManager(object):
     def __init__(self, org_unet: UNetModel = None):
         super().__init__()
@@ -71,8 +103,8 @@ class UNetStateManager(object):
         # self.unet_block_module_list = []
         self.unet_block_module_list = [*self.torch_unet.input_blocks, self.torch_unet.middle_block, self.torch_unet.out,
                                        *self.torch_unet.output_blocks, self.torch_unet.time_embed]
-        self.applied_weights = [0] * 27
-        # self.gui_weights = [0.5] * 27
+        self.applied_weights = [0] * known_block_prefixes_count
+        # self.gui_weights = [0.5] * known_block_prefixes_count
         self.enabled = False
         self.modelA_path = shared.sd_model.sd_model_checkpoint
         self.modelB_path = ''
@@ -170,15 +202,34 @@ class UNetStateManager(object):
         logger.info('model B loaded')
         self.enabled = True
         return True
-
-    def model_state_apply(self, current_weights):
-        # self.gui_weights = current_weights
+    
+    # Index-wise merging core is very awful. To support SDXL, which has less layers, it should try to ignore the additional layers. Since it is index-wise, I can't simply re-index. 
+    def make_block_state_dict(self, current_weights, update_module_list = False, lazy_merge = False):
         # ensuring maximum precision
-        operation_dtype = torch.float32 if self.modelA_dtype == torch.float32 or self.modelB_dtype == torch.float32 else torch.float16
-        for i in range(27):
+        precision_dtype = torch.float32 if self.modelA_dtype == torch.float32 or self.modelB_dtype == torch.float32 else torch.float16
+        result_state_dict = {}
+        # SDXL bypass. Index between actual UNet and "known list" is different.
+        sdxl_delta = 0
+        for i in range(known_block_prefixes_count):
+            # SDXL bypass. See map_blocks. Need delta.
+            if len(self.modelA_state_dict_by_blocks[i]) == 0:
+                #logger.debug('SDXL removed layers in modelA: {}'.format(known_block_prefixes[i]))
+                sdxl_delta = sdxl_delta + 1
+                continue
+            if len(self.modelB_state_dict_by_blocks[i]) == 0:
+                #logger.debug('SDXL removed layers in modelB: {}'.format(known_block_prefixes[i]))
+                sdxl_delta = sdxl_delta + 1
+                continue
+            if len(self.modelA_state_dict_by_blocks[i]) != len(self.modelB_state_dict_by_blocks[i]):
+                logger.error('Layer count of {} mismatch between modelA and modelB: {}'.format(known_block_prefixes[i], len(self.modelA_state_dict_by_blocks[i]), len(self.modelB_state_dict_by_blocks[i])))
+                raise Exception("ChecksumError")
+                continue
+            # Does it take so much time to update_module_list? No delta BTW.
+            if lazy_merge and (current_weights[i] == self.applied_weights[i]):
+                continue
             cur_block_state_dict = {}
             for cur_layer_key in self.modelA_state_dict_by_blocks[i]:
-                if operation_dtype == torch.float32:
+                if precision_dtype == torch.float32:
                     # try:
                     curlayer_tensor = torch.lerp(self.modelA_state_dict_by_blocks[i][cur_layer_key].to(torch.float32),
                                                  self.modelB_state_dict_by_blocks[i][cur_layer_key].to(torch.float32),
@@ -208,32 +259,24 @@ class UNetStateManager(object):
                 if str(shared.device) != self.device:
                     curlayer_tensor = curlayer_tensor.to(shared.device)
                 cur_block_state_dict[cur_layer_key] = curlayer_tensor
-            self.unet_block_module_list[i].load_state_dict(cur_block_state_dict)
-        self.applied_weights = current_weights
-
-    def model_state_construct(self, current_weights):
-        precision_dtype = torch.float32 if self.modelA_dtype == torch.float32 or self.modelB_dtype == torch.float32 else torch.float16
-        result_state_dict = {}
-        for i in range(27):
-            cur_block_state_dict = {}
-            for cur_layer_key in self.modelA_state_dict_by_blocks[i]:
-                if precision_dtype == torch.float32:
-                    curlayer_tensor = torch.lerp(self.modelA_state_dict_by_blocks[i][cur_layer_key].to(torch.float32),
-                                                 self.modelB_state_dict_by_blocks[i][cur_layer_key].to(torch.float32),
-                                                 current_weights[i])
-                else:
-                    if self.force_cpu:
-                        curlayer_tensor = torch.lerp(self.modelA_state_dict_by_blocks[i][cur_layer_key].to(torch.float32),
-                                                     self.modelB_state_dict_by_blocks[i][cur_layer_key].to(torch.float32),
-                                                     current_weights[i]).to(torch.float16)
-                    else:
-                        curlayer_tensor = torch.lerp(self.modelA_state_dict_by_blocks[i][cur_layer_key],
-                                                 self.modelB_state_dict_by_blocks[i][cur_layer_key], current_weights[i])
-
                 result_state_dict[known_block_prefixes[i] + cur_layer_key] = curlayer_tensor
+
+            if update_module_list:
+                #print(cur_block_state_dict.keys())
+                # logger.debug('Update module list: {}'.format(known_block_prefixes[i]))
+                # sdxl_delta in SD1 will be 0.
+                self.unet_block_module_list[i - sdxl_delta].load_state_dict(cur_block_state_dict)
+
         return result_state_dict
 
+    def model_state_apply(self, current_weights):
+        # self.gui_weights = current_weights
+        self.make_block_state_dict(current_weights, True, False)
+        self.applied_weights = current_weights
 
+    # For output model
+    def model_state_construct(self, current_weights):
+        return self.make_block_state_dict(current_weights, False, False)
 
     def model_state_apply_modified_blocks(self, current_weights, current_model_B):
         if not self.enabled:
@@ -248,47 +291,17 @@ class UNetStateManager(object):
         if self.applied_weights == current_weights:
             logger.debug('Nothing to change on model B')
             return
-        operation_dtype = torch.float32 if self.modelA_dtype == torch.float32 or self.modelB_dtype == torch.float32 else torch.float16
-        for i in range(27):
-            if current_weights[i] != self.applied_weights[i]:
-                cur_block_state_dict = {}
-                for cur_layer_key in self.modelA_state_dict_by_blocks[i]:
-                    if operation_dtype == torch.float32:
-                        curlayer_tensor = torch.lerp(
-                            self.modelA_state_dict_by_blocks[i][cur_layer_key].to(torch.float32),
-                            self.modelB_state_dict_by_blocks[i][cur_layer_key].to(torch.float32),
-                            current_weights[i]).to(self.dtype)
-                    else:
-                        if self.force_cpu:
-                            curlayer_tensor = torch.lerp(self.modelA_state_dict_by_blocks[i][cur_layer_key].to(torch.float32),
-                                                         self.modelB_state_dict_by_blocks[i][cur_layer_key].to(torch.float32),
-                                                         current_weights[i]).to(torch.float16)
-                        else:
-                            curlayer_tensor = torch.lerp(self.modelA_state_dict_by_blocks[i][cur_layer_key],
-                                                         self.modelB_state_dict_by_blocks[i][cur_layer_key],
-                                                         current_weights[i])
-                    if str(shared.device) != self.device:
-                        curlayer_tensor = curlayer_tensor.to(shared.device)
-                    cur_block_state_dict[cur_layer_key] = curlayer_tensor
-                self.unet_block_module_list[i].load_state_dict(cur_block_state_dict)
+        
+        self.make_block_state_dict(current_weights, True, True)
         self.applied_weights = current_weights
-
-
-
 
     # diff current_weights and self.applied_weights, apply only the difference
     def model_state_apply_block(self, current_weights):
         # self.gui_weights = current_weights
         if not self.enabled:
             return self.applied_weights
-        for i in range(27):
-            if current_weights[i] != self.applied_weights[i]:
-                cur_block_state_dict = {}
-                for cur_layer_key in self.modelA_state_dict_by_blocks[i]:
-                    curlayer_tensor = torch.lerp(self.modelA_state_dict_by_blocks[i][cur_layer_key],
-                                                 self.modelB_state_dict_by_blocks[i][cur_layer_key], current_weights[i])
-                    cur_block_state_dict[cur_layer_key] = curlayer_tensor
-                self.unet_block_module_list[i].load_state_dict(cur_block_state_dict)
+        
+        self.make_block_state_dict(current_weights, True, False)
         self.applied_weights = current_weights
         return self.applied_weights
 
@@ -304,6 +317,13 @@ class UNetStateManager(object):
 
         return filtered_dict
 
+    # Need a mini prefix checker to rule out "not discovered" layers
+    def indexof_known_key_prefix(self, key, prefixes):
+        for i in range(len(prefixes)):
+            if key.startswith(prefixes[i]):
+                return i
+        return -1
+
     def map_blocks(self, model_state_dict_input, model_state_dict_by_blocks):
         if model_state_dict_by_blocks:
             logger.error('mapping to non empty list')
@@ -312,26 +332,63 @@ class UNetStateManager(object):
         # sort model_state_dict by model_state_dict_sorted_keys
         model_state_dict = {k: model_state_dict_input[k] for k in model_state_dict_sorted_keys}
 
-
         current_block_index = 0
+        skipped_block_count = 0
+        excluded_block_count = 0
+        excluded_block_flag = False
         processing_block_dict = {}
         for key in model_state_dict:
             # logger.debug(key)
+
+            # SDXL still using this layer pattern. If it is not in sequence, or too much layers, it is not SD Unet.
+            if current_block_index >= len(known_block_prefixes):
+                logger.warn('Unknown SD UNet structure or layer sequence. Exiting mapping loop.')
+                break
+
+            # To support SDXL, we have found that IN09-IN11 and OUT09-OUT11 are not exist, then we can skip them.
+            # Meanwhile label_emb is SDXL exclusive, we need to ignore it.
+            # Before: current_block_index++
             if not key.startswith(known_block_prefixes[current_block_index]):
-                if not key.startswith(known_block_prefixes[current_block_index + 1]):
-                    logger.warn(
-                        f"unknown key {key} in statedict after block {known_block_prefixes[current_block_index]}, possible UNet structure deviation"
-                    )
-                    continue
-                else:
+                # Predict next index
+                prev_prefix = known_block_prefixes[current_block_index]
+                next_block_index = self.indexof_known_key_prefix(key, known_block_prefixes)                
+                if next_block_index >= 0:
                     model_state_dict_by_blocks.append(processing_block_dict)
-                    processing_block_dict = {}
-                    current_block_index += 1
-            block_local_key = key[len(known_block_prefixes[current_block_index]):]
+                    processing_block_dict = {}       
+                    next_prefix = known_block_prefixes[next_block_index]
+                    for dummy_index in range(current_block_index + 1, next_block_index):
+                        #logger.debug(f"Skipping key {known_block_prefixes[dummy_index]}...")
+                        model_state_dict_by_blocks.append({})
+                        skipped_block_count = skipped_block_count + 1
+                    current_block_index = next_block_index
+                    #logger.debug(f"Proceeding from {prev_prefix} to {next_prefix}...")
+                    #logger.debug(f"{key} vs {known_block_prefixes[current_block_index]}")
+                else:   
+                    if self.indexof_known_key_prefix(key, known_block_prefixes_sdxl) >= 0:
+                        excluded_block_flag = True     
+                        #logger.debug(f"SDXL exclusive key {key} detected. May be supported in future version. Ignoring...");
+                    else:
+                        excluded_block_count = excluded_block_count + 1    
+                        logger.warn(f"unknown key {key} in state_dict after block {prev_prefix}, possible UNet structure deviation")
+                    continue
+            elif excluded_block_flag:
+                excluded_block_count = excluded_block_count + 1        
+                excluded_block_flag = False    
+            
+            block_local_key = key[len(known_block_prefixes[current_block_index]):]            
             processing_block_dict[block_local_key] = model_state_dict[key]
 
         model_state_dict_by_blocks.append(processing_block_dict)
-        logger.info('mapping complete')
+        logger.debug('mapped ({} - {} + {}) layer prefix.'.format(current_block_index + 1, skipped_block_count, excluded_block_count))
+        # Index to Length.
+        processed_layer_sum = current_block_index - skipped_block_count + excluded_block_count
+        if processed_layer_sum == known_block_prefixes_count - 1:
+            logger.info('SD1 / SD2 UNet detected and mapped.')
+        else:
+            if processed_layer_sum == len(known_block_prefixes_sdxl) - 1:
+                logger.info('SDXL UNet detected and mapped. Note that exclusive layer label_emb is not supported.')
+            else:
+                logger.warn('Unknown SD UNet structure deviation. Mapping may be broken.')
         return
 
     def restore_original_unet(self):
@@ -341,7 +398,7 @@ class UNetStateManager(object):
     def unload_all(self):
         self.modelA_path = ''
         self.modelB_path = ''
-        self.applied_weights = [0.0] * 27
+        self.applied_weights = [0.0] * known_block_prefixes_count
         del self.modelA_state_dict
         self.modelA_state_dict = None
         del self.modelA_state_dict_by_blocks
@@ -356,9 +413,9 @@ class UNetStateManager(object):
 def on_save_checkpoint(output_mode_radio, position_id_fix_radio, output_format_radio, save_checkpoint_name, output_recipe_checkbox, *weights,
                         ):
     logger.debug("Gathering MBW info")
-    current_weights_nat = weights[:27]
+    current_weights_nat = weights[:known_block_prefixes_count]
 
-    weights_output_recipe = weights[27:]
+    weights_output_recipe = weights[known_block_prefixes_count:]
     if not save_checkpoint_name:
         # current timestamp
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -404,6 +461,7 @@ def on_save_checkpoint(output_mode_radio, position_id_fix_radio, output_format_r
         model_o_name = Path(save_checkpoint_name).name
 
         # Sad that model information is lost. Align to the text file instead.
+        # Meanwhile it makes the model unmergeable in A1111.
         merge_recipe = {
             "type": "auto-mbw-rt", # Actually not auto here, but time to advertise?
             "modelA": model_a_name,
@@ -431,7 +489,7 @@ def on_save_checkpoint(output_mode_radio, position_id_fix_radio, output_format_r
     elif output_format_radio == '.safetensors':       
         safetensors.torch.save_file(combined_state_dict, save_checkpoint_path, metadata=metadata if len(metadata)>0 else None)
     
-    logger.info(f"Checkpoint saved to {save_checkpoint_path}.")
+    logger.info(f"Checkpoint saved to {save_checkpoint_path}. If you want to merge with other SD versions, please restart WebUI.")
 
     return gr.update(value=save_checkpoint_name)
 
@@ -578,7 +636,7 @@ class Script(scripts.Script):
             def handle_weight_change(*slALL):
                 # convert float list to string+
                 slALL_str = [str(sl) for sl in slALL]
-                old_config_str = ','.join(slALL_str[:25])
+                old_config_str = ','.join(slALL_str[:reduced_weights_length])
                 return old_config_str
 
             # for slider in sl_ALL:
@@ -589,8 +647,8 @@ class Script(scripts.Script):
             def on_weight_command_submit(command_str, *current_weights):
                 weight_list = parse_weight_str_to_list(command_str, list(current_weights))
                 if not weight_list:
-                    return [gr.update() for _ in range(27)]
-                if len(weight_list) == 25:
+                    return [gr.update() for _ in range(known_block_prefixes_count)]
+                if len(weight_list) == reduced_weights_length:
                     # noinspection PyTypeChecker
                     weight_list.extend([gr.update(), gr.update()])
                 return weight_list
@@ -657,7 +715,7 @@ class Script(scripts.Script):
 
                     weight_list = current_weights
                     if 'BASE' in parsed_json:
-                        weight_list = [float(parsed_json['BASE'])] * 27
+                        weight_list = [float(parsed_json['BASE'])] * known_block_prefixes_count
                         del parsed_json['BASE']
                     for key, value in parsed_json.items():
                         weight_list[weight_name_map[key]] = value
@@ -665,7 +723,8 @@ class Script(scripts.Script):
                 else:
                     # parse as list
                     _list = [x.strip() for x in weightstr.split(",")]
-                    if len(_list) != 25 and len(_list) != 27:
+                    if len(_list) != reduced_weights_length and len(_list) != known_block_prefixes_count:
+                        logger.error(f'invalid list length: {len(_list)}')
                         return None
                     validated_float_weight_list = []
                     for x in _list:
@@ -679,8 +738,8 @@ class Script(scripts.Script):
                 _weights = presetWeights.find_weight_by_name(preset_weight_name)
                 weight_list = parse_weight_str_to_list(_weights, list(current_weights))
                 if not weight_list:
-                    return [gr.update() for _ in range(27)]
-                if len(weight_list) == 25:
+                    return [gr.update() for _ in range(known_block_prefixes_count)]
+                if len(weight_list) == reduced_weights_length:
                     # noinspection PyTypeChecker
                     weight_list.extend([gr.update(), gr.update()])
                 return weight_list
@@ -702,7 +761,7 @@ class Script(scripts.Script):
 
             def on_config_paste(*current_weights):
                 slALL_str = [str(sl) for sl in current_weights]
-                old_config_str = ','.join(slALL_str[:25])
+                old_config_str = ','.join(slALL_str[:reduced_weights_length])
                 return old_config_str
 
             config_paste_button.click(fn=on_config_paste, inputs=[*sl_ALL], outputs=[weight_command_textbox])
@@ -763,11 +822,13 @@ class Script(scripts.Script):
 
     def process(self, p, *args):
         injector_enabled = shared.UNBMSettingsInjector.enabled
-        gui_weights = shared.UNBMSettingsInjector.weights if injector_enabled else args[:27]
-        modelB = shared.UNBMSettingsInjector.modelB if injector_enabled else args[27]
-        enabled = injector_enabled if injector_enabled else args[28]
+        gui_weights = shared.UNBMSettingsInjector.weights if injector_enabled else args[:known_block_prefixes_count]
+        modelB = shared.UNBMSettingsInjector.modelB if injector_enabled else args[known_block_prefixes_count]
+        enabled = injector_enabled if injector_enabled else args[known_block_prefixes_count + 1]
         if not enabled:
+            logger.debug('injector is not enabled.')
             return
         if not shared.UNetBManager:
+            logger.debug('initializing UNetBManager.')
             shared.UNetBManager = UNetStateManager(shared.sd_model.model.diffusion_model)
         shared.UNetBManager.model_state_apply_modified_blocks(gui_weights, modelB)

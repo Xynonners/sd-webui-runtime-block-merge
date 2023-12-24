@@ -8,6 +8,8 @@ Minor fix and enhancements on top of [Xynonners' Fork](https://github.com/Xynonn
 
 ## Major change
 
+- **Add SDXL support.** See next session.
+
 - Fix the awful inconsistancy between UI, runtime, and AutoMBW.
 
 ```py
@@ -25,6 +27,20 @@ sl_ALL = [*sl_INPUT, *sl_MID, *sl_OUTPUT, sl_TIME_EMBED, sl_OUT]
 
 ```py
 safetensors.torch.save_file(combined_state_dict, save_checkpoint_path, metadata=metadata if len(metadata)>0 else None)
+```
+
+## Notes on merging SDXL models
+
+- Due to ~~messy codebase~~ backward compatibility, it is adviced to restart WebUI if your next merge is in different SD version, and make sure you have booted WebUI with a SDXL model loaded. Otherwise you will see loads of `Missing key(s) in state_dict:`. **Therefore you need 3 SDXLs in total to operate.**
+
+- This extension supports most layers, but `label_emb` will be untouched. ~~I don't want to add another "slider" to make things overcomplicated.~~
+
+- **IN09-IN11 and OUT09-OUT11 will be ignored for merging SDXL.** UI / algorithm mappings will be untouched. For AutoMBW, it will still includes all 27 parameters to optimize, but you can expect they are *irrelevant* to the merge, and the algorithm (e.g. `BayesianOptimization`) will take care of it. ~~noisy environment is common in AI/ML, so no worry.~~ 
+
+```py
+# To support SDXL, we have found that IN09-IN11 and OUT09-OUT11 are not exist, then we can skip them.
+# Meanwhile label_emb is SDXL exclusive, we need to ignore it.
+# Before: current_block_index++
 ```
 
 ## Read metadata inside the model
@@ -50,6 +66,10 @@ safetensors.torch.save_file(combined_state_dict, save_checkpoint_path, metadata=
     }
 }
 ```
+
+## Some observation.
+
+- The very bottom of "merging algorithm" is `torch.lerp`. Therefore efficiency is good, but it won't support add-diff.
 
 ## This is part of my research.
 
