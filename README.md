@@ -31,7 +31,9 @@ safetensors.torch.save_file(combined_state_dict, save_checkpoint_path, metadata=
 
 ## Notes on merging SDXL models
 
-- Due to ~~messy codebase~~ backward compatibility, it is adviced to restart WebUI if your next merge is in different SD version, and make sure you have booted WebUI with a SDXL model loaded. Otherwise you will see loads of `Missing key(s) in state_dict:`. **Therefore you need 3 SDXLs in total to operate.**
+- Due to ~~messy codebase~~ backward compatibility, it is adviced to restart WebUI if your next merge is in different SD version. 
+
+- You will see loads of `Missing key(s) in state_dict:` when the settings in A1111 is not correcly loaded. Keep switching *UI's selected model* to non SDXL models, and try again. If you see a `*.yaml` is loaded, it is usually success. Sadly it is done in A1111 instead of extensions.
 
 - This extension supports most layers, but `label_emb` will be untouched. ~~I don't want to add another "slider" to make things overcomplicated.~~
 
