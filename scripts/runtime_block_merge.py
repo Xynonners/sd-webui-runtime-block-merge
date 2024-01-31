@@ -450,7 +450,7 @@ def on_save_checkpoint(output_mode_radio, position_id_fix_radio, output_format_r
         combined_state_dict['cond_stage_model.transformer.text_model.embeddings.position_ids'] = torch.tensor([list(range(77))], dtype=torch.int64)
 
     # https://github.com/AUTOMATIC1111/stable-diffusion-webui/blob/master/modules/extras.py#L257
-    # No there is no UI for you to drop the receipe haha
+    # No there is no UI for you to drop the recipe haha
     metadata = {}
     metadata["format"] = "pt"
 
@@ -472,9 +472,9 @@ def on_save_checkpoint(output_mode_radio, position_id_fix_radio, output_format_r
             "mbwrt_weights": ','.join([str(w) for w in weights_output_recipe]),
             "mbwrt_weights_seq": "[*sl_INPUT, *sl_MID, *sl_OUTPUT, sl_OUT, sl_TIME_EMBED]"
         }
-        metadata["sd_mbwrt_receipe"] = json.dumps(merge_recipe)
+        metadata["sd_mbwrt_recipe"] = json.dumps(merge_recipe)
         recipe_path = Path(shared.sd_model.sd_model_checkpoint).parent / f"{save_checkpoint_name}.recipe.txt"
-        logger.debug(f"Saving receipe file as {recipe_path}")
+        logger.debug(f"Saving recipe file as {recipe_path}")
         with open(recipe_path, 'w') as f:
             f.write(f"modelA={model_a_name}\n")
             f.write(f"modelB={model_b_name}\n")

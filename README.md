@@ -54,7 +54,7 @@ safetensors.torch.save_file(combined_state_dict, save_checkpoint_path, metadata=
 ```json
 {
     "__metadata__": {
-        "sd_mbwrt_receipe": {
+        "sd_mbwrt_recipe": {
             "type": "auto-mbw-rt",
             "modelA": "_03a-mzpikas_tmnd_enhanced-sd-v1-4.safetensors",
             "modelB": "_04a-dreamshaper_8-sd-v1-4.safetensors",
